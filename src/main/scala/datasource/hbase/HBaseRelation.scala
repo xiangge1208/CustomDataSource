@@ -1,6 +1,8 @@
 package datasource.hbase
 
 import org.apache.hadoop.hbase.HBaseConfiguration
+import org.apache.hadoop.hbase.client.Result
+import org.apache.hadoop.hbase.io.ImmutableBytesWritable
 import org.apache.hadoop.hbase.mapreduce.TableInputFormat
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.sources.{BaseRelation, TableScan}
@@ -16,11 +18,16 @@ case class HBaseRelation(sqlContext: SQLContext, parameters: Map[String, String]
   val hbaseTableName: String = parameters.getOrElse("hbase_table_name", sys.error("not valid schema"))
   val hbaseTableSchema: String = parameters.getOrElse("hbase_table_schema", sys.error("not valid schema"))
   val registerTableSchema: String = parameters.getOrElse("sparksql_table_schema", sys.error("not valid schema"))
-  val rowRange: String = parameters.getOrElse("row_range", "->")
-  //get star row and end row
-  val range: Array[String] = rowRange.split("->", -1)
-  val startRowKey: String = range(0).trim
-  val endRowKey: String = range(1).trim
+  val rowKey_Range: String = parameters.getOrElse("row_range", "->")
+  val time_Range: String = parameters.getOrElse("time_range", "->")
+  //get start row and end row
+  val rowKeyRange: Array[String] = rowKey_Range.split("->", -1)
+  val startRowKey: String = rowKeyRange(0).trim
+  val endRowKey: String = rowKeyRange(1).trim
+  //get start timestemp and end timestemp
+  val timeRange: Array[String] = time_Range.split("->", -1)
+  val startTime: String = timeRange(0).trim
+  val endTime: String = timeRange(1).trim
   protected val tempHBaseFields: Array[HBaseSchemaField] = extractHBaseSchema(hbaseTableSchema) //do not use this, a temp field
   val registerTableFields: Array[RegisteredSchemaField] = extractRegisterSchema(registerTableSchema)
   val tempFieldRelation: mutable.LinkedHashMap[HBaseSchemaField, RegisteredSchemaField] = tableSchemaFieldMapping(tempHBaseFields, registerTableFields)
@@ -91,7 +98,6 @@ case class HBaseRelation(sqlContext: SQLContext, parameters: Map[String, String]
     map
   }
 
-
   /**
    * spark sql schema will be register
    * registerTableSchema   '(rowkey string, value string, column_a string)'
@@ -121,15 +127,17 @@ case class HBaseRelation(sqlContext: SQLContext, parameters: Map[String, String]
     hbaseConf.set(TableInputFormat.SCAN_COLUMNS, queryColumns)
     hbaseConf.set(TableInputFormat.SCAN_ROW_START, startRowKey)
     hbaseConf.set(TableInputFormat.SCAN_ROW_STOP, endRowKey)
+    hbaseConf.set(TableInputFormat.SCAN_TIMERANGE_START, startTime)
+    hbaseConf.set(TableInputFormat.SCAN_TIMERANGE_END, endTime)
 
-    val hbaseRdd = sqlContext.sparkContext.newAPIHadoopRDD(
+    val hbaseRdd: RDD[(ImmutableBytesWritable, Result)] = sqlContext.sparkContext.newAPIHadoopRDD(
       hbaseConf,
       classOf[org.apache.hadoop.hbase.mapreduce.TableInputFormat],
       classOf[org.apache.hadoop.hbase.io.ImmutableBytesWritable],
       classOf[org.apache.hadoop.hbase.client.Result]
     )
 
-    val rs = hbaseRdd.map(_._2).map(result => {
+    val rs = hbaseRdd.map(_._2).map((result: Result) => {
       var values = new ArrayBuffer[Any]()
       hbaseTableFields.foreach { field =>
         values += Resolver.resolve(field, result)
